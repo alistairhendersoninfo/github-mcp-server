@@ -1,0 +1,273 @@
+version: '3.8'
+
+services:
+  # Traefik reverse proxy with AWS Route 53 DNS challenge
+  traefik:
+    image: traefik:v3.0
+    container_name: github-mcp-traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - github-mcp-network
+      - traefik-public
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Dashboard (secured)
+    environment:
+      - TRAEFIK_LOG_LEVEL=INFO
+      - TRAEFIK_ACCESSLOG=true
+      - TRAEFIK_API_DASHBOARD=true
+      - TRAEFIK_API_INSECURE=false
+      - TRAEFIK_ENTRYPOINTS_WEB_ADDRESS=:80
+      - TRAEFIK_ENTRYPOINTS_WEBSECURE_ADDRESS=:443
+      - TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL=${ACME_EMAIL}
+      - TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_STORAGE=/acme.json
+      - TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_DNSCHALLENGE_PROVIDER=route53
+      - TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_DNSCHALLENGE_RESOLVERS=1.1.1.1:53,8.8.8.8:53
+      # AWS credentials for Route 53 DNS challenge
+      - AWS_ACCESS_KEY_ID_FILE=/run/secrets/aws_access_key_id
+      - AWS_SECRET_ACCESS_KEY_FILE=/run/secrets/aws_secret_access_key
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - traefik-acme:/acme.json
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-logs:/var/log/traefik
+    secrets:
+      - aws_access_key_id
+      - aws_secret_access_key
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN}`)"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.middlewares=auth"
+      - "traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_AUTH}"
+      # Global HTTP to HTTPS redirect
+      - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.entrypoints=web"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # GitHub MCP Server (Rust)
+  github-mcp-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: github-mcp-server
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - github-mcp-network
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8443
+      - DATABASE_URL=sqlite:./data/github-mcp-server.db
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET_FILE=/run/secrets/github_client_secret
+      - GITHUB_REDIRECT_URI=https://${DOMAIN}/auth/github/callback
+      - GITHUB_API_BASE_URL=https://api.github.com
+      - RATE_LIMIT_RPM=60
+      - SESSION_TIMEOUT_HOURS=24
+      - MAX_TOKEN_AGE_DAYS=30
+      - AUDIT_LOG_ENABLED=true
+      - RUST_LOG=info
+    volumes:
+      - github-mcp-data:/app/data
+      - github-mcp-config:/app/config
+      - github-mcp-logs:/app/logs
+    secrets:
+      - jwt_secret
+      - github_client_secret
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.github-mcp.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.github-mcp.entrypoints=websecure"
+      - "traefik.http.routers.github-mcp.tls.certresolver=letsencrypt"
+      - "traefik.http.services.github-mcp.loadbalancer.server.port=8443"
+      # Security middleware
+      - "traefik.http.routers.github-mcp.middlewares=security-headers,rate-limit"
+      - "traefik.http.middlewares.security-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
+      - "traefik.http.middlewares.security-headers.headers.customresponseheaders.X-Content-Type-Options=nosniff"
+      - "traefik.http.middlewares.security-headers.headers.customresponseheaders.X-Frame-Options=DENY"
+      - "traefik.http.middlewares.security-headers.headers.customresponseheaders.X-XSS-Protection=1; mode=block"
+      - "traefik.http.middlewares.security-headers.headers.customresponseheaders.Strict-Transport-Security=max-age=31536000; includeSubDomains; preload"
+      - "traefik.http.middlewares.security-headers.headers.customresponseheaders.Referrer-Policy=strict-origin-when-cross-origin"
+      # Rate limiting
+      - "traefik.http.middlewares.rate-limit.ratelimit.average=100"
+      - "traefik.http.middlewares.rate-limit.ratelimit.burst=50"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8443/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      - traefik
+
+  # Web Server for static assets (optional - can be served by MCP server)
+  nginx:
+    image: nginx:alpine
+    container_name: github-mcp-nginx
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - github-mcp-network
+    volumes:
+      - ../web:/usr/share/nginx/html:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx-logs:/var/log/nginx
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nginx.rule=Host(`${DOMAIN}`) && PathPrefix(`/static`)"
+      - "traefik.http.routers.nginx.entrypoints=websecure"
+      - "traefik.http.routers.nginx.tls.certresolver=letsencrypt"
+      - "traefik.http.services.nginx.loadbalancer.server.port=80"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Note: Certificate renewal is handled automatically by Traefik
+  # No separate container needed - Traefik renews certificates automatically
+  # when they are within 30 days of expiration
+
+  # Monitoring and metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: github-mcp-prometheus
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - github-mcp-network
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prometheus.rule=Host(`metrics.${DOMAIN}`)"
+      - "traefik.http.routers.prometheus.entrypoints=websecure"
+      - "traefik.http.routers.prometheus.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.prometheus.middlewares=auth"
+      - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
+
+  # Log aggregation
+  loki:
+    image: grafana/loki:latest
+    container_name: github-mcp-loki
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - github-mcp-network
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+
+  # Dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: github-mcp-grafana
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - github-mcp-network
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD_FILE=/run/secrets/grafana_admin_password
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    secrets:
+      - grafana_admin_password
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`dashboard.${DOMAIN}`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+
+  # Security monitoring
+  fail2ban:
+    image: crazymax/fail2ban:latest
+    container_name: github-mcp-fail2ban
+    restart: unless-stopped
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./fail2ban:/data
+      - traefik-logs:/var/log/traefik:ro
+      - nginx-logs:/var/log/nginx:ro
+      - /var/log:/var/log:ro
+    environment:
+      - TZ=${TZ:-UTC}
+      - F2B_LOG_LEVEL=INFO
+      - F2B_DB_PURGE_AGE=30d
+
+networks:
+  github-mcp-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+  traefik-public:
+    external: true
+
+volumes:
+  traefik-acme:
+    driver: local
+  traefik-logs:
+    driver: local
+  github-mcp-data:
+    driver: local
+  github-mcp-config:
+    driver: local
+  github-mcp-logs:
+    driver: local
+  nginx-logs:
+    driver: local
+  prometheus-data:
+    driver: local
+  loki-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+secrets:
+  aws_access_key_id:
+    file: ./secrets/aws_access_key_id.txt
+  aws_secret_access_key:
+    file: ./secrets/aws_secret_access_key.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
+  github_client_secret:
+    file: ./secrets/github_client_secret.txt
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt
