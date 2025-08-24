@@ -59,17 +59,18 @@ services:
       retries: 3
       start_period: 40s
 
-  # GitHub MCP Server (Rust)
+  # GitHub MCP Server (Rust) - NO EXTERNAL PORTS
   github-mcp-server:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.secure
     container_name: github-mcp-server
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     networks:
-      - github-mcp-network
+      - github-mcp-network  # INTERNAL ONLY - No external access
+    # NO PORTS EXPOSED - Only accessible via Traefik
     environment:
       - HOST=0.0.0.0
       - PORT=8443
@@ -117,15 +118,16 @@ services:
     depends_on:
       - traefik
 
-  # Web Server for static assets (optional - can be served by MCP server)
+  # Web Server for static assets - NO EXTERNAL PORTS
   nginx:
-    image: nginx:alpine
+    image: nginx:1.25-alpine
     container_name: github-mcp-nginx
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     networks:
-      - github-mcp-network
+      - github-mcp-network  # INTERNAL ONLY - No external access
+    # NO PORTS EXPOSED - Only accessible via Traefik
     volumes:
       - ../web:/usr/share/nginx/html:ro
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -146,17 +148,19 @@ services:
   # No separate container needed - Traefik renews certificates automatically
   # when they are within 30 days of expiration
 
-  # Monitoring and metrics
+  # Monitoring and metrics - NO EXTERNAL PORTS
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.48.0
     container_name: github-mcp-prometheus
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     networks:
-      - github-mcp-network
+      - github-mcp-network  # INTERNAL ONLY - No external access
+    # NO PORTS EXPOSED - Only accessible via Traefik
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
       - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -173,29 +177,31 @@ services:
       - "traefik.http.routers.prometheus.middlewares=auth"
       - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
 
-  # Log aggregation
+  # Log aggregation - INTERNAL ONLY
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:2.9.0
     container_name: github-mcp-loki
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     networks:
-      - github-mcp-network
+      - github-mcp-network  # INTERNAL ONLY - No external access
+    # NO PORTS EXPOSED - Internal service only
     volumes:
       - ./monitoring/loki.yml:/etc/loki/local-config.yaml:ro
       - loki-data:/loki
     command: -config.file=/etc/loki/local-config.yaml
 
-  # Dashboards
+  # Dashboards - NO EXTERNAL PORTS
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:10.2.0-alpine
     container_name: github-mcp-grafana
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     networks:
-      - github-mcp-network
+      - github-mcp-network  # INTERNAL ONLY - No external access
+    # NO PORTS EXPOSED - Only accessible via Traefik
     environment:
       - GF_SECURITY_ADMIN_PASSWORD_FILE=/run/secrets/grafana_admin_password
       - GF_USERS_ALLOW_SIGN_UP=false
@@ -203,6 +209,7 @@ services:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
       - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning/dashboards:ro
     secrets:
       - grafana_admin_password
     labels:

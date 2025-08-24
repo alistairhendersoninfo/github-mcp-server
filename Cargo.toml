@@ -47,6 +47,9 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 # Rate limiting and security
 governor = "0.6"
 
+# Metrics and monitoring
+prometheus = "0.13"
+
 [dev-dependencies]
 tokio-test = "0.4"
 mockito = "1.0"

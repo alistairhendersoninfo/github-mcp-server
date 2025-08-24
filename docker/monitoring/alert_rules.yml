@@ -1,0 +1,139 @@
+# Prometheus alerting rules for GitHub MCP Server
+groups:
+  - name: github-mcp-server.rules
+    rules:
+      # Service availability alerts
+      - alert: ServiceDown
+        expr: up{job=~"github-mcp-server|traefik"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "Service {{ $labels.job }} has been down for more than 1 minute."
+
+      # High error rate alerts
+      - alert: HighErrorRate
+        expr: rate(traefik_service_requests_total{code=~"5.."}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value }} errors per second for service {{ $labels.service }}."
+
+      # High response time alerts
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(traefik_service_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High response time detected"
+          description: "95th percentile response time is {{ $value }}s for service {{ $labels.service }}."
+
+      # GitHub API rate limit alerts
+      - alert: GitHubRateLimitLow
+        expr: github_api_rate_limit_remaining < 500
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GitHub API rate limit running low"
+          description: "GitHub API rate limit remaining: {{ $value }}"
+
+      - alert: GitHubRateLimitCritical
+        expr: github_api_rate_limit_remaining < 100
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GitHub API rate limit critically low"
+          description: "GitHub API rate limit remaining: {{ $value }}"
+
+      # SSL certificate expiration alerts
+      - alert: SSLCertificateExpiringSoon
+        expr: (traefik_tls_certs_not_after - time()) / 86400 < 30
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "SSL certificate expiring soon"
+          description: "SSL certificate for {{ $labels.cn }} expires in {{ $value }} days."
+
+      - alert: SSLCertificateExpiringSoon
+        expr: (traefik_tls_certs_not_after - time()) / 86400 < 7
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "SSL certificate expiring very soon"
+          description: "SSL certificate for {{ $labels.cn }} expires in {{ $value }} days."
+
+      # Resource usage alerts
+      - alert: HighCPUUsage
+        expr: rate(container_cpu_usage_seconds_total{name=~"github-mcp.*"}[5m]) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage detected"
+          description: "Container {{ $labels.name }} CPU usage is {{ $value }}%."
+
+      - alert: HighMemoryUsage
+        expr: container_memory_usage_bytes{name=~"github-mcp.*"} / container_spec_memory_limit_bytes{name=~"github-mcp.*"} * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage detected"
+          description: "Container {{ $labels.name }} memory usage is {{ $value }}%."
+
+      - alert: HighDiskUsage
+        expr: container_fs_usage_bytes{name=~"github-mcp.*"} / container_fs_limit_bytes{name=~"github-mcp.*"} * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage detected"
+          description: "Container {{ $labels.name }} disk usage is {{ $value }}%."
+
+      # Database connection alerts
+      - alert: DatabaseConnectionsHigh
+        expr: database_connections > 8
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High number of database connections"
+          description: "Database connections: {{ $value }}"
+
+      # MCP command failure alerts
+      - alert: MCPCommandFailures
+        expr: rate(mcp_commands_total{status="error"}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High MCP command failure rate"
+          description: "MCP command failure rate is {{ $value }} failures per second."
+
+      # Authentication failure alerts
+      - alert: HighAuthenticationFailures
+        expr: rate(traefik_service_requests_total{code="401"}[5m]) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High authentication failure rate"
+          description: "Authentication failure rate is {{ $value }} failures per second."
+
+      # Rate limiting alerts
+      - alert: RateLimitingTriggered
+        expr: rate(traefik_service_requests_total{code="429"}[5m]) > 0.1
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "Rate limiting is being triggered"
+          description: "Rate limiting triggered {{ $value }} times per second."

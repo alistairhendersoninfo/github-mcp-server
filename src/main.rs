@@ -15,15 +15,21 @@ use tower_http::{
 };
 use tracing::{info, warn};
 
+// Metrics
+use prometheus::{Counter, Histogram, Gauge, Registry, Encoder, TextEncoder};
+use std::sync::Mutex;
+
 mod auth;
 mod config;
 mod error;
 mod github;
 mod mcp;
 mod security;
+mod metrics;
 
 use config::Config;
 use error::AppError;
+use metrics::Metrics;
 
 type AppState = Arc<AppStateInner>;
 
@@ -31,6 +37,7 @@ type AppState = Arc<AppStateInner>;
 struct AppStateInner {
     config: Config,
     db: sqlx::SqlitePool,
+    metrics: Arc<Metrics>,
 }
 
 #[tokio::main]
@@ -51,8 +58,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     sqlx::migrate!("./migrations").run(&db).await?;
     info!("Database initialized and migrations applied");
 
+    // Initialize metrics
+    let metrics = Arc::new(Metrics::new().expect("Failed to create metrics"));
+    info!("Metrics initialized");
+
     // Create application state
-    let state = Arc::new(AppStateInner { config: config.clone(), db });
+    let state = Arc::new(AppStateInner { 
+        config: config.clone(), 
+        db,
+        metrics: metrics.clone(),
+    });
 
     // Build application router
     let app = create_router(state);
@@ -70,6 +85,9 @@ fn create_router(state: AppState) -> Router {
     Router::new()
         // Health check endpoint
         .route("/health", get(health_check))
+        
+        // Metrics endpoint
+        .route("/metrics", get(metrics::metrics_handler))
         
         // Authentication routes
         .route("/auth/github", get(auth::github_oauth_start))
