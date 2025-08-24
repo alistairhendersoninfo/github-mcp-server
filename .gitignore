@@ -1,0 +1,72 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+/data/
+
+# Logs
+/logs/
+*.log
+
+# SSL Certificates
+/certs/
+*.pem
+*.crt
+*.key
+acme.json
+
+# Docker
+.dockerignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+/tmp/
+/temp/
+
+# Build artifacts
+/dist/
+/build/
+
+# Node modules (if any)
+node_modules/
+
+# Python (if any)
+__pycache__/
+*.pyc
+
+# Backup files
+*.bak
+*.backup
+
+# Security sensitive files
+/config/secrets/
+/docker/fail2ban/
+traefik-acme/
+
+# Test coverage
+/coverage/
+*.lcov
+
+# Documentation build
+/docs/_build/
+/docs/site/
