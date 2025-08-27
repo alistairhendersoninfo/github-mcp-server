@@ -77,6 +77,29 @@ EOF
     echo -e "${BLUE}Version: ${SCRIPT_VERSION}${NC}"
     echo -e "${BLUE}Installation Directory: ${INSTALL_DIR}${NC}"
     echo
+    echo -e "${YELLOW}⚠️  IMPORTANT: Prerequisites Required${NC}"
+    echo -e "${YELLOW}Before continuing, ensure you have read and completed:${NC}"
+    echo -e "${YELLOW}📖 docs/INSTALLATION-PREREQUISITES.md${NC}"
+    echo
+    echo -e "${CYAN}This installation requires:${NC}"
+    echo -e "   • Domain name with AWS Route 53 DNS"
+    echo -e "   • AWS IAM credentials with Route 53 permissions"
+    echo -e "   • GitHub App created and configured"
+    echo -e "   • Email for Let's Encrypt certificates"
+    echo -e "   • SSH access configuration planned"
+    echo
+    read -p "Have you completed all prerequisites? (y/N): " prerequisites_ready
+    if [[ ! "$prerequisites_ready" =~ ^[Yy]$ ]]; then
+        echo -e "${RED}Please complete prerequisites first:${NC}"
+        echo -e "${CYAN}1. Read: docs/INSTALLATION-PREREQUISITES.md${NC}"
+        echo -e "${CYAN}2. Set up AWS Route 53 and IAM credentials${NC}"
+        echo -e "${CYAN}3. Create GitHub App with proper configuration${NC}"
+        echo -e "${CYAN}4. Plan your security settings${NC}"
+        echo
+        echo -e "${YELLOW}Then run this installer again.${NC}"
+        exit 1
+    fi
+    echo
 }
 
 # Detect OS and architecture
@@ -139,26 +162,53 @@ get_configuration() {
     read -p "Enter AWS region for Route 53 [us-east-1]: " AWS_REGION
     AWS_REGION=${AWS_REGION:-us-east-1}
     
-    # GitHub OAuth
+    # GitHub App Configuration
     echo
-    log_info "You need to create a GitHub OAuth App at:"
-    log_info "https://github.com/settings/applications/new"
+    log_info "🐙 GitHub App Configuration"
+    log_info "You should have already created a GitHub App as per the prerequisites guide."
+    log_info "If you haven't, please stop and read: docs/INSTALLATION-PREREQUISITES.md"
     echo
-    log_info "Use these settings:"
-    log_info "- Application name: GitHub MCP Server"
-    log_info "- Homepage URL: https://$DOMAIN"
-    log_info "- Authorization callback URL: https://$DOMAIN/auth/github/callback"
+    log_info "📋 Required GitHub App Settings (verify these are correct):"
+    log_info "   • App Name: GitHub MCP Server - [Your Organization]"
+    log_info "   • Homepage URL: https://$DOMAIN"
+    log_info "   • Callback URL: https://$DOMAIN/auth/github/callback"
+    log_info "   • Webhook URL: https://$DOMAIN/webhooks/github"
+    log_info "   • OAuth enabled during installation: ✅ CHECKED"
+    log_info "   • Required permissions: Contents, Issues, PRs, Projects (Read/Write)"
     echo
-    read -p "Enter GitHub OAuth Client ID: " GITHUB_CLIENT_ID
+    log_warning "⚠️  CRITICAL: The callback URL must be EXACTLY: https://$DOMAIN/auth/github/callback"
+    echo
+    
+    read -p "Enter GitHub App Client ID (starts with 'Iv1.'): " GITHUB_CLIENT_ID
     if [[ -z "$GITHUB_CLIENT_ID" ]]; then
-        error_exit "GitHub Client ID is required"
+        error_exit "GitHub App Client ID is required"
     fi
     
-    read -s -p "Enter GitHub OAuth Client Secret: " GITHUB_CLIENT_SECRET
+    # Validate Client ID format
+    if [[ ! "$GITHUB_CLIENT_ID" =~ ^Iv1\. ]]; then
+        log_warning "⚠️  Client ID should start with 'Iv1.' - are you sure this is correct?"
+        read -p "Continue anyway? (y/N): " confirm_client_id
+        if [[ ! "$confirm_client_id" =~ ^[Yy]$ ]]; then
+            error_exit "Please verify your GitHub App Client ID"
+        fi
+    fi
+    
+    read -s -p "Enter GitHub App Client Secret: " GITHUB_CLIENT_SECRET
     echo
     if [[ -z "$GITHUB_CLIENT_SECRET" ]]; then
-        error_exit "GitHub Client Secret is required"
+        error_exit "GitHub App Client Secret is required"
     fi
+    
+    # Validate Client Secret length (should be 40 characters)
+    if [[ ${#GITHUB_CLIENT_SECRET} -ne 40 ]]; then
+        log_warning "⚠️  Client Secret should be 40 characters - are you sure this is correct?"
+        read -p "Continue anyway? (y/N): " confirm_client_secret
+        if [[ ! "$confirm_client_secret" =~ ^[Yy]$ ]]; then
+            error_exit "Please verify your GitHub App Client Secret"
+        fi
+    fi
+    
+    log_success "GitHub App credentials configured"
     
     # SSH Access Configuration
     echo
